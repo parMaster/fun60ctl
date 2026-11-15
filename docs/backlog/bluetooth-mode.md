@@ -1,16 +1,20 @@
 ---
-worth: yes
+worth: no
 where: main.go:112
 added: 2026-11-15
 ---
-# Nobody has tried `fun60ctl` in Bluetooth mode
+# Bluetooth mode is blocked while Karabiner modifies the board
 
-The board has a third connection mode, Bluetooth, and it's untested. Wired works fully. The 2.4 GHz dongle works for switches only (see `dongle-reads.md`).
+Probed on macOS 14 with the board paired over Bluetooth Low Energy. The rejected fix is adding a Bluetooth path to `openBoard`. Karabiner has to grab the board to apply remaps, and that grab locks out `fun60ctl`. The board is unusable without Karabiner, so a Bluetooth path would never be used.
 
-Things to find out:
+## What the probe found
 
-1. **Does the vendor interface exist over BLE?** With the board paired over Bluetooth, list every HID device, not only VID `0x3151`. `openBoard` currently enumerates `0x3151` only. Over BLE, the board may report a different VID/PID, or a Bluetooth vendor-ID source. Look for a device with `BusType` Bluetooth and usage page `0xFFFF`.
-2. **If it exists, try a switch.** Send `04 <layer>` as a feature report, the same as wired, and check for the blink, the feel and the vendor app.
-3. **If it doesn't exist, check how the vendor driver does it.** ry5088-flasher's `docs/cloud-api.md` mentions `upgradeOTAGATT`, which streams firmware over a custom BLE GATT service. Config commands may use the same GATT path instead of HID. On macOS, a custom GATT service needs CoreBluetooth, which is a much bigger change than hidapi. Use the vendor web app's WebHID capture snippet (in `dongle-reads.md`) to see if the app reaches the board over BLE at all.
+- The board enumerates as `3151:5027` ("FUN60 PRO-1"), bus Bluetooth. Wired is `0x5030`.
+- It has a vendor collection on page `0xFF55`, usage `0x202`. Wired uses page `0xFFFF`, usage `2`, so the command protocol over Bluetooth may differ. Nobody has sent a frame to it yet.
+- macOS exposes all six collections (keyboard, consumer, mouse, vendor and others) as ONE IOHIDDevice. Over the cable, the vendor interface is a separate USB interface.
+- Opening it without Input Monitoring fails with `(iokit/common) not permitted`.
+- With Input Monitoring granted, opening fails with `exclusive access and device already open`. Karabiner-Elements seizes every keyboard whose events it modifies, and that seizure covers the vendor collection too.
 
-Worth it because a Bluetooth user currently has no hotkey path at all.
+## What would reopen it
+
+A user who runs `fun60ctl` without Karabiner modifying the board. Then the next steps are: grant Input Monitoring, dump the `0xFF55` report descriptor, and try a read-only `GetInfo` before any layer switch.
