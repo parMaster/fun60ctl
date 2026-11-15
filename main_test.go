@@ -67,14 +67,50 @@ func TestDongleSwitchRetriesReadBack(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := setLayerDongle(dongleBoard(f), frame, 2); err != nil {
-		t.Fatal(err)
+	b := dongleBoard(f)
+	ok, err := writeConfirmed(b, frame, func() (bool, error) {
+		l, err := b.readLayer()
+		return l == 2, err
+	})
+	if err != nil || !ok {
+		t.Fatalf("ok = %v, err = %v", ok, err)
 	}
 	want := []byte{proto.OpSetProfile, // no FC after the switch: it gets no reply
 		proto.OpGetProfile, proto.OpFetchReply,
 		proto.OpGetProfile, proto.OpFetchReply}
 	if string(f.sent) != string(want) {
 		t.Fatalf("sent % X, want % X", f.sent, want)
+	}
+}
+
+func TestLightTarget(t *testing.T) {
+	custom3 := proto.LED{proto.ModeCustom, 4, 4, 0x20, 0, 0xC8, 0xC8}
+	custom5 := proto.LED{proto.ModeCustom, 4, 4, 0x40, 0, 0xC8, 0xC8}
+	alwaysOn := proto.LED{0x01, 2, 4, 0x06, 0xFA, 0xFF, 0xFA}
+	for _, c := range []struct {
+		name string
+		arg  string
+		cur  proto.LED
+		want byte
+	}{
+		{"next from custom 3", "next", custom3, 3},
+		{"next wraps from custom 5", "next", custom5, 0},
+		{"next from a built-in mode", "next", alwaysOn, 0},
+		{"explicit layer from a built-in mode", "4", alwaysOn, 3},
+	} {
+		got, err := lightTarget(c.arg, c.cur)
+		if err != nil || got != c.want {
+			t.Errorf("%s: got %d, %v; want %d", c.name, got, err, c.want)
+		}
+	}
+}
+
+func TestDescribeLED(t *testing.T) {
+	if got := describeLED(proto.LED{proto.ModeCustom, 4, 4, 0x10}); got != "custom 2" {
+		t.Errorf("got %q, want custom 2", got)
+	}
+	if got := describeLED(proto.LED{0x01, 2, 4, 0x06}); got != "built-in mode 1" {
+		t.Errorf("got %q, want built-in mode 1", got)
 	}
 }
 

@@ -30,6 +30,9 @@ commands:
   actuation          show the active actuation layer (1-4)
   actuation <1-4>    switch to that actuation layer
   actuation next     switch to the next layer, wrapping 4 -> 1
+  light              show the active lighting (custom 1-5, or a built-in mode)
+  light <1-5>        select that custom lighting layer
+  light next         select the next custom lighting layer, wrapping 5 -> 1
 
 flags:
 `
@@ -44,7 +47,7 @@ var fun60ProIDs = []uint16{2304, 2305, 2464, 2600, 2785}
 
 var (
 	flagDongle  = flag.Bool("dongle", false, "use the 2.4 GHz dongle even when a cable is connected")
-	flagForce   = flag.Bool("force", false, "switch layers even if the dev_id is not a known FUN60 Pro")
+	flagForce   = flag.Bool("force", false, "switch layers or lighting even if the dev_id is not a known FUN60 Pro")
 	flagVerbose = flag.Bool("v", false, "print HID interfaces, raw reports and timings")
 )
 
@@ -61,14 +64,15 @@ func main() {
 }
 
 func run(args []string) error {
-	validCmd := (len(args) == 1 && (args[0] == "info" || args[0] == "actuation")) ||
-		(len(args) == 2 && args[0] == "actuation")
+	counts := map[string]byte{"actuation": proto.LayerCount, "light": proto.CustomLightCount}
+	count, layered := counts[args0(args)]
+	validCmd := (len(args) == 1 && (args[0] == "info" || layered)) || (len(args) == 2 && layered)
 	if !validCmd {
 		flag.Usage()
 		os.Exit(2)
 	}
 	if len(args) == 2 {
-		if _, err := targetLayer(args[1], 0); err != nil {
+		if _, err := targetLayer(args[1], 0, count); err != nil {
 			return err
 		}
 	}
@@ -89,11 +93,22 @@ func run(args []string) error {
 	switch {
 	case args[0] == "info":
 		return cmdInfo(b)
+	case args[0] == "light" && len(args) == 1:
+		return cmdGetLight(b)
+	case args[0] == "light":
+		return cmdSetLight(b, args[1])
 	case len(args) == 1:
 		return cmdGetLayer(b)
 	default:
 		return cmdSetLayer(b, args[1])
 	}
+}
+
+func args0(args []string) string {
+	if len(args) == 0 {
+		return ""
+	}
+	return args[0]
 }
 
 // device is the part of *hid.Device that board uses, so tests can fake it.
@@ -165,7 +180,7 @@ var errNoAnswer = errors.New("the keyboard didn't answer through the 2.4 GHz don
 func (b board) send(frame [proto.ReportLen]byte) error {
 	out := make([]byte, 1+proto.ReportLen) // byte 0 is report ID 0
 	copy(out[1:], frame[:])
-	debugf("send % X", frame[:8])
+	debugf("send % X", frame[:9]) // byte 8 holds the SET_LED checksum
 	if _, err := b.dev.SendFeatureReport(out); err != nil {
 		return fmt.Errorf("send 0x%02X: %w", frame[0], err)
 	}
@@ -248,15 +263,57 @@ func cmdGetLayer(b board) error {
 	return nil
 }
 
-func cmdSetLayer(b board, arg string) error {
-	if !*flagForce {
-		info, err := b.readInfo()
+// checkModel refuses to write to a board that isn't a known FUN60 Pro, unless -force is set.
+func checkModel(b board) error {
+	if *flagForce {
+		return nil
+	}
+	info, err := b.readInfo()
+	if err != nil {
+		return err
+	}
+	if !slices.Contains(fun60ProIDs, info.DevID) {
+		return fmt.Errorf("dev_id %d is not a known FUN60 Pro; use -force to try anyway", info.DevID)
+	}
+	return nil
+}
+
+// writeConfirmed sends a write, then reads back with done until it reports
+// the write landed. Over the cable it reads back once. Over the dongle the
+// keyboard never relays a reply to a write, and a frame sent right after it
+// replaces it in the dongle before it goes out over the radio. So the read-back
+// waits replyDelay first, then repeats until done or replyTimeout passes.
+// It returns false with no error when the board still disagrees.
+func writeConfirmed(b board, frame [proto.ReportLen]byte, done func() (bool, error)) (bool, error) {
+	if !b.isDongle() {
+		if _, err := b.transact(frame); err != nil {
+			return false, err
+		}
+		ok, err := done()
 		if err != nil {
-			return err
+			return false, fmt.Errorf("sent, but read-back failed: %w", err)
 		}
-		if !slices.Contains(fun60ProIDs, info.DevID) {
-			return fmt.Errorf("dev_id %d is not a known FUN60 Pro; use -force to try anyway", info.DevID)
+		return ok, nil
+	}
+	if err := b.send(frame); err != nil {
+		return false, err
+	}
+	time.Sleep(replyDelay)
+	t0 := time.Now()
+	for {
+		ok, err := done()
+		if err != nil {
+			return false, fmt.Errorf("sent, but read-back failed: %w", err)
 		}
+		if ok || time.Since(t0) >= replyTimeout {
+			return ok, nil
+		}
+	}
+}
+
+func cmdSetLayer(b board, arg string) error {
+	if err := checkModel(b); err != nil {
+		return err
 	}
 	// Only "next" depends on the current layer.
 	var current byte
@@ -267,7 +324,7 @@ func cmdSetLayer(b board, arg string) error {
 		}
 		current = l
 	}
-	target, err := targetLayer(arg, current)
+	target, err := targetLayer(arg, current, proto.LayerCount)
 	if err != nil {
 		return err
 	}
@@ -275,47 +332,85 @@ func cmdSetLayer(b board, arg string) error {
 	if err != nil {
 		return err
 	}
-	if b.isDongle() {
-		return setLayerDongle(b, frame, target)
-	}
-	if _, err := b.transact(frame); err != nil {
+	var got byte
+	ok, err := writeConfirmed(b, frame, func() (bool, error) {
+		l, err := b.readLayer()
+		got = l
+		return l == target, err
+	})
+	if err != nil {
 		return err
 	}
-	got, err := b.readLayer()
-	if err != nil {
-		return fmt.Errorf("switched, but read-back failed: %w", err)
-	}
-	if got != target {
+	if !ok {
 		return fmt.Errorf("asked for layer %d, board reports %d", target+1, got+1)
 	}
 	fmt.Println(got + 1)
 	return nil
 }
 
-// setLayerDongle sends the switch and confirms it by reading the layer back.
-// Over the dongle the keyboard never relays a reply to a switch. A frame sent
-// right after the switch replaces it in the dongle before it goes out over the
-// radio, so the read-back waits replyDelay first. It then repeats until the
-// board reports the target or replyTimeout passes.
-func setLayerDongle(b board, frame [proto.ReportLen]byte, target byte) error {
-	if err := b.send(frame); err != nil {
+func (b board) readLED() (proto.LED, error) {
+	r, err := b.transact(proto.GetLED())
+	if err != nil {
+		return proto.LED{}, err
+	}
+	return proto.ParseLED(r)
+}
+
+func describeLED(l proto.LED) string {
+	if n, custom := l.Custom(); custom {
+		return fmt.Sprintf("custom %d", n+1)
+	}
+	return fmt.Sprintf("built-in mode %d", l.Mode())
+}
+
+func cmdGetLight(b board) error {
+	l, err := b.readLED()
+	if err != nil {
 		return err
 	}
-	time.Sleep(replyDelay)
-	t0 := time.Now()
-	for {
-		got, err := b.readLayer()
-		if err != nil {
-			return fmt.Errorf("switch sent, but read-back failed: %w", err)
-		}
-		if got == target {
-			fmt.Println(got + 1)
-			return nil
-		}
-		if time.Since(t0) >= replyTimeout {
-			return fmt.Errorf("asked for layer %d, board still reports %d", target+1, got+1)
-		}
+	fmt.Println(describeLED(l))
+	return nil
+}
+
+// cmdSetLight selects a custom lighting layer. It changes only the mode and the
+// layer nibble of the current LED params, so brightness and the rest stay as set.
+func cmdSetLight(b board, arg string) error {
+	if err := checkModel(b); err != nil {
+		return err
 	}
+	cur, err := b.readLED()
+	if err != nil {
+		return err
+	}
+	target, err := lightTarget(arg, cur)
+	if err != nil {
+		return err
+	}
+	var got proto.LED
+	ok, err := writeConfirmed(b, proto.SetLED(cur.WithCustom(target)), func() (bool, error) {
+		l, err := b.readLED()
+		got = l
+		n, custom := l.Custom()
+		return custom && n == target, err
+	})
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return fmt.Errorf("asked for custom %d, board reports %s", target+1, describeLED(got))
+	}
+	fmt.Println(describeLED(got))
+	return nil
+}
+
+// lightTarget picks the 0-based custom layer: "next" steps from the current
+// custom layer, or starts at custom 1 when a built-in mode is showing.
+func lightTarget(arg string, cur proto.LED) (byte, error) {
+	n, custom := cur.Custom()
+	if arg == "next" && !custom {
+		return 0, nil
+	}
+	return targetLayer(arg, n, proto.CustomLightCount)
 }
 
 func debugf(format string, a ...any) {

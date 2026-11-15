@@ -15,11 +15,19 @@ const (
 	OpGetInfo    byte = 0x8F
 	OpSetProfile byte = 0x04
 	OpGetProfile byte = 0x84
+	OpSetLED     byte = 0x07
+	OpGetLED     byte = 0x87
 	OpFetchReply byte = 0xFC
 )
 
 // LayerCount is how many actuation layers the board stores (0..3 on the wire).
 const LayerCount = 4
+
+// CustomLightCount is how many custom lighting layers the board stores.
+const CustomLightCount = 5
+
+// ModeCustom is the LED mode that shows one of the custom lighting layers.
+const ModeCustom byte = 0x0D
 
 // Frame builds a 64-byte report with the Bit7 header checksum:
 // bytes 0..7 sum to 0xFF modulo 256, and the checksum sits in byte 7.
@@ -55,6 +63,55 @@ func FetchReply() [ReportLen]byte {
 	var r [ReportLen]byte
 	r[0] = OpFetchReply
 	return r
+}
+
+// LED holds the SET_LED / GET_LED params: mode, speed, brightness, options,
+// R, G, B. In custom mode the high nibble of options is the custom layer (0-based).
+type LED [7]byte
+
+// Custom returns the 0-based custom lighting layer, and whether the board is
+// showing one at all rather than a built-in mode.
+func (l LED) Custom() (byte, bool) {
+	return l[3] >> 4, l[0] == ModeCustom
+}
+
+// WithCustom returns l switched to custom lighting layer n (0-based). The low
+// nibble of options and every other byte stay as they were.
+func (l LED) WithCustom(n byte) LED {
+	l[0] = ModeCustom
+	l[3] = n<<4 | l[3]&0x0F
+	return l
+}
+
+// Mode is the LED mode byte: ModeCustom, or a built-in mode.
+func (l LED) Mode() byte { return l[0] }
+
+// GetLED asks for the current LED params.
+func GetLED() [ReportLen]byte { return Frame(OpGetLED) }
+
+// SetLED writes LED params. Its 7 params fill bytes 1..7, so it uses the Bit8
+// checksum instead of Frame's: bytes 0..8 sum to 0xFF, and the checksum sits in byte 8.
+func SetLED(l LED) [ReportLen]byte {
+	var r [ReportLen]byte
+	r[0] = OpSetLED
+	copy(r[1:8], l[:])
+	var sum byte
+	for _, b := range r[:8] {
+		sum += b
+	}
+	r[8] = 0xFF - sum
+	return r
+}
+
+// ParseLED decodes a GET_LED reply.
+func ParseLED(resp []byte) (LED, error) {
+	r, err := echoed(resp, OpGetLED, 8)
+	if err != nil {
+		return LED{}, err
+	}
+	var l LED
+	copy(l[:], r[1:8])
+	return l, nil
 }
 
 // Info is the decoded GET_INFOR reply.

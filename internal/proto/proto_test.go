@@ -55,6 +55,56 @@ func TestFetchReplyHasNoChecksum(t *testing.T) {
 	}
 }
 
+// Captured on hardware: the write that selects custom lighting layer 1.
+func TestSetLEDMatchesHardwareVector(t *testing.T) {
+	f := SetLED(LED{0x0D, 0x04, 0x04, 0x00, 0x00, 0xC8, 0xC8})
+	want := []byte{0x07, 0x0D, 0x04, 0x04, 0x00, 0x00, 0xC8, 0xC8, 0x53}
+	if string(f[:9]) != string(want) {
+		t.Fatalf("got % X, want % X", f[:9], want)
+	}
+	for i, b := range f[9:] {
+		if b != 0 {
+			t.Fatalf("byte %d = 0x%02X, want 0 padding", i+9, b)
+		}
+	}
+}
+
+func TestParseLED(t *testing.T) {
+	cases := []struct {
+		name   string
+		resp   []byte
+		mode   byte
+		layer  byte
+		custom bool
+	}{
+		{"custom 1", []byte{0x00, 0x87, 0x0D, 0x04, 0x04, 0x00, 0x00, 0xC8, 0xC8}, 0x0D, 0, true},
+		{"custom 2", []byte{0x00, 0x87, 0x0D, 0x04, 0x04, 0x10, 0x00, 0xC8, 0xC8}, 0x0D, 1, true},
+		{"always on", []byte{0x00, 0x87, 0x01, 0x02, 0x04, 0x06, 0xFA, 0xFF, 0xFA}, 0x01, 0, false},
+	}
+	for _, c := range cases {
+		l, err := ParseLED(c.resp)
+		if err != nil {
+			t.Fatalf("%s: %v", c.name, err)
+		}
+		layer, custom := l.Custom()
+		if l.Mode() != c.mode || custom != c.custom || (custom && layer != c.layer) {
+			t.Errorf("%s: mode 0x%02X layer %d custom %v", c.name, l.Mode(), layer, custom)
+		}
+	}
+	if _, err := ParseLED([]byte{0x00, 0x84, 0x00}); !errors.Is(err, ErrBadReply) {
+		t.Errorf("wrong echo: err = %v, want ErrBadReply", err)
+	}
+}
+
+func TestWithCustomKeepsOtherBytes(t *testing.T) {
+	alwaysOn := LED{0x01, 0x02, 0x04, 0x06, 0xFA, 0xFF, 0xFA}
+	got := alwaysOn.WithCustom(2)
+	want := LED{0x0D, 0x02, 0x04, 0x26, 0xFA, 0xFF, 0xFA}
+	if got != want {
+		t.Fatalf("got % X, want % X", got, want)
+	}
+}
+
 func TestSetLayerFrame(t *testing.T) {
 	f, err := SetLayer(3)
 	if err != nil {
