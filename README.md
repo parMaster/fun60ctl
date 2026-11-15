@@ -137,7 +137,9 @@ dongle:  cmd → 50 ms → FC → 20 ms → GET_REPORT = reply, or zeros → rep
 
 ## Hardware results
 
-Tested on a FUN60 Pro, `dev_id` 2785, firmware v407, on macOS. On Windows, `info`, `actuation` and `light` work over the cable, with `info` at ~60 ms; the dongle hasn't been tried there yet.
+Tested on a FUN60 Pro, `dev_id` 2785, firmware v407, on macOS. The table shows macOS timings.
+
+On Windows, every command works over the cable and the dongle, and the PowerToys shortcuts work. `info` took ~60 ms wired and ~125 ms over the dongle, `actuation 2` ~250 ms and `light 1` ~330 ms over the dongle.
 
 | Test | Wired | 2.4 GHz dongle |
 |---|---|---|
@@ -159,7 +161,7 @@ Tested on a FUN60 Pro, `dev_id` 2785, firmware v407, on macOS. On Windows, `info
 - The vendor app polls the dongle status every 2 s with an `F7` frame (no checksum). Before a switch it sends `FE 40` (no checksum). The keyboard announces a new layer with input report ID 5: `0F <layer 0-3>`. `fun60ctl` uses none of these.
 - The `FC` step was found by capturing the vendor web app ([app.monsgeek.com](https://app.monsgeek.com)) in Chrome. A DevTools snippet wrapped `HIDDevice.sendFeatureReport` and `receiveFeatureReport` to log every frame while the app loaded a config.
 
-- On Windows the vendor config interface is its own device (`MI_02`, page `0xFFFF`, usage 2). Interface 1 also has a page `0xFFFF` collection, but with usage 1, so `openBoard` skips it. Windows hidapi returns the report ID as the first byte of a read (`00 8F …`); the reply parser handles both layouts.
+- On Windows the vendor config interface is its own device (`MI_02`, page `0xFFFF`, usage 2), on the cable and on the dongle. Interface 1 also has a page `0xFFFF` collection, but with usage 1, so `openBoard` skips it. Windows hidapi returns the report ID as the first byte of a read (`00 8F …`); the reply parser handles both layouts.
 
 ### Bluetooth isn't supported
 
