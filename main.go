@@ -76,8 +76,7 @@ func run(args []string) error {
 		return fmt.Errorf("init hidapi: %w", err)
 	}
 	defer func() { _ = hid.Exit() }()
-	// Don't seize the interface, so the vendor app and key remappers keep working.
-	hid.SetOpenExclusive(false)
+	openShared()
 
 	b, err := openBoard()
 	if err != nil {
