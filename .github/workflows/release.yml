@@ -1,0 +1,81 @@
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+jobs:
+  darwin:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+
+      # Apple clang builds both CPUs from one arm64 runner.
+      - name: build
+        env:
+          CGO_ENABLED: "1"
+          GOOS: darwin
+        run: |
+          mkdir dist
+          GOARCH=arm64 CC="clang -arch arm64" go build -trimpath -o dist/fun60ctl-darwin-arm64 .
+          GOARCH=amd64 CC="clang -arch x86_64" go build -trimpath -o dist/fun60ctl-darwin-amd64 .
+          file dist/*
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: darwin
+          path: dist/
+
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+
+      # The runner image ships MinGW gcc, which cgo uses for go-hid.
+      - name: build
+        shell: bash
+        env:
+          CGO_ENABLED: "1"
+          GOOS: windows
+          GOARCH: amd64
+        run: |
+          mkdir dist
+          go build -trimpath -o dist/fun60ctl-windows-amd64.exe .
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: windows
+          path: dist/
+
+  release:
+    needs: [darwin, windows]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          cd dist
+          sha256sum fun60ctl-* > checksums.txt
+          gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --title "$TAG" --notes "Binaries for macOS (arm64, amd64) and Windows (amd64).
+
+          The Windows binary is untested. The macOS binaries are unsigned: run \`xattr -d com.apple.quarantine <file>\` and \`chmod +x <file>\` before the first run." fun60ctl-* checksums.txt

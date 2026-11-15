@@ -60,7 +60,7 @@ func TestParseInfo(t *testing.T) {
 	// dev_id 2304 = 0x0900 LE, version major 3 minor 6 -> v306
 	body := []byte{0x8F, 0x00, 0x09, 0, 0, 0, 0, 6, 3, 0, 0}
 	for name, resp := range map[string][]byte{
-		"plain":         body,
+		"plain":          body,
 		"with report id": append([]byte{0}, body...),
 	} {
 		got, err := ParseInfo(resp)
@@ -76,7 +76,7 @@ func TestParseInfo(t *testing.T) {
 func TestParseLayer(t *testing.T) {
 	body := []byte{0x84, 2, 0, 0, 0, 0, 0, 0}
 	for name, resp := range map[string][]byte{
-		"plain":         body,
+		"plain":          body,
 		"with report id": append([]byte{0}, body...),
 	} {
 		got, err := ParseLayer(resp)
