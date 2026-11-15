@@ -42,7 +42,7 @@ xattr -d com.apple.quarantine fun60ctl-darwin-arm64
 chmod +x fun60ctl-darwin-arm64
 ```
 
-The Windows binary is untested.
+On Windows, rename `fun60ctl-windows-amd64.exe` to `fun60ctl.exe` and put it somewhere stable, for example `C:\Tools\fun60ctl.exe`.
 
 ## Hotkeys with Karabiner
 
@@ -63,6 +63,21 @@ A rule for `light <1-5>` looks the same, with the command swapped.
   ]
 }
 ```
+
+## Hotkeys with PowerToys
+
+On Windows, [PowerToys](https://learn.microsoft.com/windows/powertoys/) Keyboard Manager can run `fun60ctl.exe` from a shortcut.
+Open Keyboard Manager → Remap a shortcut, and add one row per layer:
+
+| Shortcut | Action | Program | Arguments |
+|---|---|---|---|
+| Ctrl + Alt + 1 | Run program | `C:\Tools\fun60ctl.exe` | `actuation 1` |
+| Ctrl + Alt + 2 | Run program | `C:\Tools\fun60ctl.exe` | `actuation 2` |
+| Ctrl + Alt + 3 | Run program | `C:\Tools\fun60ctl.exe` | `actuation 3` |
+| Ctrl + Alt + 4 | Run program | `C:\Tools\fun60ctl.exe` | `actuation 4` |
+
+Set "Visibility of app's window" to Hidden, or a console window flashes on every switch.
+Use the full path to the `.exe`. Shortcuts for `light <1-5>` work the same way.
 
 ## Build from source
 
@@ -122,7 +137,7 @@ dongle:  cmd → 50 ms → FC → 20 ms → GET_REPORT = reply, or zeros → rep
 
 ## Hardware results
 
-Tested on a FUN60 Pro, `dev_id` 2785, firmware v407, on macOS.
+Tested on a FUN60 Pro, `dev_id` 2785, firmware v407, on macOS. On Windows, `info`, `actuation` and `light` work over the cable, with `info` at ~60 ms; the dongle hasn't been tried there yet.
 
 | Test | Wired | 2.4 GHz dongle |
 |---|---|---|
@@ -143,6 +158,8 @@ Tested on a FUN60 Pro, `dev_id` 2785, firmware v407, on macOS.
 - The radio link varies. Back-to-back reads usually take ~75 ms. With a poor link or right after the board has been idle, a reply can take up to a second or get lost. When no reply arrives within 1 s, `fun60ctl` says the keyboard didn't answer. A sleeping board doesn't answer until you press a key.
 - The vendor app polls the dongle status every 2 s with an `F7` frame (no checksum). Before a switch it sends `FE 40` (no checksum). The keyboard announces a new layer with input report ID 5: `0F <layer 0-3>`. `fun60ctl` uses none of these.
 - The `FC` step was found by capturing the vendor web app ([app.monsgeek.com](https://app.monsgeek.com)) in Chrome. A DevTools snippet wrapped `HIDDevice.sendFeatureReport` and `receiveFeatureReport` to log every frame while the app loaded a config.
+
+- On Windows the vendor config interface is its own device (`MI_02`, page `0xFFFF`, usage 2). Interface 1 also has a page `0xFFFF` collection, but with usage 1, so `openBoard` skips it. Windows hidapi returns the report ID as the first byte of a read (`00 8F …`); the reply parser handles both layouts.
 
 ### Bluetooth isn't supported
 

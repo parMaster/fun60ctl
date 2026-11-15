@@ -2,13 +2,11 @@
 worth: yes
 added: 2026-11-15
 ---
-# The Windows binary has never run, and there's no PowerToys hotkey setup
+# Windows: dongle untried, PowerToys setup unconfirmed
 
-The release workflow builds `fun60ctl-windows-amd64.exe`, and it also cross-compiles locally with zig. Nobody has run it on Windows yet, so the README marks it untested.
+Over the cable, the Windows binary works: `info`, `actuation` and `light`. `openBoard` picks the `MI_02` vendor interface (page `0xFFFF`, usage 2), and the 65-byte feature reports go through. The README now has a PowerToys section.
 
-To do on a Windows machine:
+Left to do on Windows:
 
-- Run `fun60ctl -v info` and `fun60ctl actuation 2`, wired and over the dongle.
-- Check that `-v` lists a vendor interface with usage page `0xFFFF`, usage 2. That's how `openBoard` finds it.
-- Watch the feature-report size. The code sends 65 bytes (report ID 0 + 64). Windows hidapi wants exactly the report length plus one, which should match.
-- Set up PowerToys Keyboard Manager: map ctrl+alt+1..4 to "Run program" `fun60ctl.exe actuation 1..4`. Document it in the README next to the Karabiner example, and drop the "untested" notes.
+- Run `fun60ctl -v -dongle info`, `actuation 2` and `light 1` over the 2.4 GHz dongle. Check the `FC` fetch works there too.
+- Set up the PowerToys shortcuts as the README describes and confirm the hidden window and full path work. Then add Windows to the hardware results table.
