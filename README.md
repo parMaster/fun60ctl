@@ -69,3 +69,7 @@ Tested on a FUN60 Pro, `dev_id` 2785, firmware v407, on macOS.
 ## Credits
 
 The frame format, the `GET_INFOR` layout and the FUN60 Pro `dev_id` list come from [ry5088-flasher](https://github.com/dot-agi/ry5088-flasher), which documents the RY5088 vendor protocol.
+
+## License
+
+MIT, see [LICENSE](LICENSE).
