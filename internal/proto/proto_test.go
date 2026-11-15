@@ -43,6 +43,18 @@ func TestGetInfoMatchesFlasherVector(t *testing.T) {
 	}
 }
 
+func TestFetchReplyHasNoChecksum(t *testing.T) {
+	f := FetchReply()
+	if f[0] != OpFetchReply {
+		t.Fatalf("op = 0x%02X, want 0xFC", f[0])
+	}
+	for i, b := range f[1:] {
+		if b != 0 {
+			t.Fatalf("byte %d = 0x%02X, want 0", i+1, b)
+		}
+	}
+}
+
 func TestSetLayerFrame(t *testing.T) {
 	f, err := SetLayer(3)
 	if err != nil {

@@ -15,6 +15,7 @@ const (
 	OpGetInfo    byte = 0x8F
 	OpSetProfile byte = 0x04
 	OpGetProfile byte = 0x84
+	OpFetchReply byte = 0xFC
 )
 
 // LayerCount is how many actuation layers the board stores (0..3 on the wire).
@@ -45,6 +46,15 @@ func SetLayer(layer byte) ([ReportLen]byte, error) {
 		return [ReportLen]byte{}, fmt.Errorf("layer %d out of range 0..%d", layer, LayerCount-1)
 	}
 	return Frame(OpSetProfile, layer), nil
+}
+
+// FetchReply asks the 2.4 GHz dongle for the keyboard's reply to the last
+// command; the next GET_REPORT returns it. Unlike other frames it carries no
+// checksum: the vendor app sends FC followed by zeros.
+func FetchReply() [ReportLen]byte {
+	var r [ReportLen]byte
+	r[0] = OpFetchReply
+	return r
 }
 
 // Info is the decoded GET_INFOR reply.

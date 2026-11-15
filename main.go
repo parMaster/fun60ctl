@@ -21,6 +21,7 @@ const (
 	vendorPage   = 0xFFFF
 	vendorUsage  = 2
 	replyDelay   = 50 * time.Millisecond
+	fetchDelay   = 20 * time.Millisecond // FC starts a radio fetch; its result lands this much later
 	replyTimeout = time.Second
 	usageMessage = `usage: fun60ctl [flags] <command>
 
@@ -95,8 +96,15 @@ func run(args []string) error {
 	}
 }
 
+// device is the part of *hid.Device that board uses, so tests can fake it.
+type device interface {
+	SendFeatureReport(p []byte) (int, error)
+	GetFeatureReport(p []byte) (int, error)
+	Close() error
+}
+
 type board struct {
-	dev  *hid.Device
+	dev  device
 	info hid.DeviceInfo
 }
 
@@ -149,10 +157,9 @@ func openBoard() (board, error) {
 
 func (b board) isDongle() bool { return slices.Contains(dongleIDs, b.info.ProductID) }
 
-// errDongleRead explains why reads fail over the dongle: it answers every
-// GET_REPORT with its own status frame, and the way to fetch the keyboard's
-// reply is still unknown. Writes do reach the keyboard.
-var errDongleRead = errors.New("reading from the keyboard over the 2.4 GHz dongle isn't supported yet; connect the cable for this command")
+// errNoAnswer means the dongle never relayed a reply. The usual cause is a
+// dongle with no keyboard behind it: the board is off, asleep, or in another mode.
+var errNoAnswer = errors.New("the keyboard didn't answer through the 2.4 GHz dongle; check that it's on and in 2.4 GHz mode")
 
 // send writes one frame without waiting for a reply.
 func (b board) send(frame [proto.ReportLen]byte) error {
@@ -166,12 +173,12 @@ func (b board) send(frame [proto.ReportLen]byte) error {
 }
 
 // transact sends one frame and polls until a reply echoes its opcode.
-// Over the dongle the first reads can return other frames, because the
-// keyboard's answer comes back over radio later.
+// Over the dongle, GET_REPORT returns the dongle's own status frame or the
+// previous reply, so each poll first sends FC to fetch the keyboard's answer.
+// FC starts a fetch over the radio, and the reply lands in the dongle about
+// fetchDelay later. An FC sent before the keyboard has replied fetches
+// nothing and yields zeros until the next FC, hence one per poll.
 func (b board) transact(frame [proto.ReportLen]byte) ([]byte, error) {
-	if b.isDongle() {
-		return nil, errDongleRead
-	}
 	t0 := time.Now()
 	if err := b.send(frame); err != nil {
 		return nil, err
@@ -179,6 +186,12 @@ func (b board) transact(frame [proto.ReportLen]byte) ([]byte, error) {
 	var last []byte
 	for time.Since(t0) < replyTimeout {
 		time.Sleep(replyDelay)
+		if b.isDongle() {
+			if err := b.send(proto.FetchReply()); err != nil {
+				return nil, err
+			}
+			time.Sleep(fetchDelay)
+		}
 		in := make([]byte, 1+proto.ReportLen)
 		n, err := b.dev.GetFeatureReport(in)
 		if err != nil {
@@ -189,6 +202,9 @@ func (b board) transact(frame [proto.ReportLen]byte) ([]byte, error) {
 		if proto.Echoes(last, frame[0]) {
 			return last, nil
 		}
+	}
+	if b.isDongle() {
+		return nil, errNoAnswer
 	}
 	return last, nil // the parser reports the mismatch with the last bytes seen
 }
@@ -233,9 +249,6 @@ func cmdGetLayer(b board) error {
 }
 
 func cmdSetLayer(b board, arg string) error {
-	if b.isDongle() {
-		return setLayerDongle(b, arg)
-	}
 	if !*flagForce {
 		info, err := b.readInfo()
 		if err != nil {
@@ -262,6 +275,9 @@ func cmdSetLayer(b board, arg string) error {
 	if err != nil {
 		return err
 	}
+	if b.isDongle() {
+		return setLayerDongle(b, frame, target)
+	}
 	if _, err := b.transact(frame); err != nil {
 		return err
 	}
@@ -276,26 +292,30 @@ func cmdSetLayer(b board, arg string) error {
 	return nil
 }
 
-// setLayerDongle sends the switch without confirmation. The keyboard applies
-// it (tested: it blinks and the vendor app shows the new layer), but the
-// dongle gives no readable reply, so "next" and the dev_id check can't run.
-func setLayerDongle(b board, arg string) error {
-	if arg == "next" {
-		return fmt.Errorf("\"next\" needs the current layer: %w", errDongleRead)
-	}
-	target, err := targetLayer(arg, 0)
-	if err != nil {
-		return err
-	}
-	frame, err := proto.SetLayer(target)
-	if err != nil {
-		return err
-	}
+// setLayerDongle sends the switch and confirms it by reading the layer back.
+// Over the dongle the keyboard never relays a reply to a switch. A frame sent
+// right after the switch replaces it in the dongle before it goes out over the
+// radio, so the read-back waits replyDelay first. It then repeats until the
+// board reports the target or replyTimeout passes.
+func setLayerDongle(b board, frame [proto.ReportLen]byte, target byte) error {
 	if err := b.send(frame); err != nil {
 		return err
 	}
-	fmt.Printf("%d (sent via dongle, not confirmed)\n", target+1)
-	return nil
+	time.Sleep(replyDelay)
+	t0 := time.Now()
+	for {
+		got, err := b.readLayer()
+		if err != nil {
+			return fmt.Errorf("switch sent, but read-back failed: %w", err)
+		}
+		if got == target {
+			fmt.Println(got + 1)
+			return nil
+		}
+		if time.Since(t0) >= replyTimeout {
+			return fmt.Errorf("asked for layer %d, board still reports %d", target+1, got+1)
+		}
+	}
 }
 
 func debugf(format string, a ...any) {

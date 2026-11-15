@@ -1,7 +1,7 @@
 # fun60ctl
 
 Switch the actuation layer (the 4 sets of magnetic-switch settings) on a MonsGeek FUN60 Pro from the command line.
-The stock firmware dropped the Fn+F/G/H/J shortcut, so this does the same switch over USB in about 160 ms.
+The stock firmware dropped the Fn+F/G/H/J shortcut, so this does the same switch over the cable in about 160 ms, or over the 2.4 GHz dongle in about 250 ms.
 A hotkey tool like Karabiner or PowerToys can call it.
 
 It talks to the stock firmware. Nothing gets flashed.
@@ -74,7 +74,7 @@ CGO_ENABLED=1 GOOS=windows GOARCH=amd64 CC="zig cc -target x86_64-windows-gnu" g
 
 ```
 enumerate HID (VID 0x3151)
-  → PID 0x5030 (wired), usage page 0xFFFF, usage 2
+  → PID 0x5030 (wired) or 0x5026 (dongle), usage page 0xFFFF, usage 2
   → GET_INFOR 0x8F → dev_id must be a FUN60 Pro (2304, 2305, 2464, 2600, 2785)
   → SET_PROFILE 0x04 <layer 0-3>
   → GET_PROFILE 0x84 → confirm the new layer
@@ -84,24 +84,34 @@ Each report is 64 bytes, sent as a HID feature report with report ID 0.
 Bytes 0..7 must sum to 0xFF, and the checksum goes in byte 7.
 The board needs about 50 ms before its reply is ready.
 
+Over the dongle, a read takes one more step. After the command, `fun60ctl` sends `FC` (no checksum). That makes the dongle fetch the keyboard's reply over the radio, and the next `GET_REPORT` returns it about 20 ms later:
+
+```
+wired:   cmd → 50 ms → GET_REPORT = reply
+dongle:  cmd → 50 ms → FC → 20 ms → GET_REPORT = reply, or zeros → repeat FC
+```
+
 ## Hardware results
 
 Tested on a FUN60 Pro, `dev_id` 2785, firmware v407, on macOS.
 
 | Test | Wired | 2.4 GHz dongle |
 |---|---|---|
-| `info` | works, ~60 ms | not supported (no readable reply) |
-| `actuation` (read) | works, ~60 ms | not supported (no readable reply) |
-| `actuation <n>` | works, ~160 ms, confirmed by read-back | works, send-only, not confirmed |
-| `actuation next` | works | not supported (needs a read) |
+| `info` | works, ~60 ms | works, ~75–220 ms |
+| `actuation` (read) | works, ~60 ms | works, ~75–300 ms |
+| `actuation <n>` | works, ~160 ms, confirmed by read-back | works, ~210–360 ms, confirmed by read-back |
+| `actuation next` | works | works, ~290–360 ms |
 
 - `SET_PROFILE` (`0x04`) is the actuation layer. Layer 2 was set to 0.55 mm in the vendor app. After `actuation 2`, keys triggered at 0.55 mm and the app showed layer 2 active.
 - The backlight blinks once on a switch, the same as a switch from the app.
 - The dongle shows up as PID `0x5026` ("MonsGeek 2.4G Wireless Keyboard"), not the `0x5038` in ry5088-flasher's hardware notes. It has its own vendor interface (page `0xFFFF`, usage 2).
-- Writes pass through the dongle unchanged. The vendor app sends the same `04 <layer>` frame over the dongle as over the cable. The keyboard applies it, blinks, and the app shows the new layer.
-- Reads don't come back the same way. The dongle answers every `GET_REPORT` with its own status frame, for example `00 64 64 00 01 01 01 7B`. The second byte (`0x64` = 100) is probably the battery level. The first byte flips to `01` some time after a command, so it may mean "reply waiting".
-- The vendor app polls that status every 2 s with an `F7` frame (no checksum). Before a switch it sends `FE 40` (no checksum). It never reads a feature reply for the switch. Instead the keyboard announces the new layer with input report ID 5: `0F <layer 0-3>`.
-- Reading over the dongle needs the command that fetches the keyboard's reply. Capturing the app while it loads a config would show it.
+- Writes pass through the dongle unchanged. The vendor app sends the same `04 <layer>` frame over the dongle as over the cable.
+- Without `FC`, the dongle answers `GET_REPORT` with its own status frame, for example `00 64 64 00 01 01 01 7B`, or with the previous reply. The second byte (`0x64` = 100) is probably the battery level.
+- The keyboard never relays a reply to a switch over the dongle. So `fun60ctl` confirms it with `GET_PROFILE`, repeated until the board reports the new layer. A frame sent right after the switch replaces it in the dongle before it goes out, so the read-back waits 50 ms first.
+- A `GET_PROFILE` reply for layer 1 is byte for byte the request (`84 00 … 7B`), because the layer byte is `00`. It is still a real reply: on layer 2 it comes back as `84 01 …`.
+- The radio link varies. Back-to-back reads usually take ~75 ms. With a poor link or right after the board has been idle, a reply can take up to a second or get lost. When no reply arrives within 1 s, `fun60ctl` says the keyboard didn't answer. A sleeping board doesn't answer until you press a key.
+- The vendor app polls the dongle status every 2 s with an `F7` frame (no checksum). Before a switch it sends `FE 40` (no checksum). The keyboard announces a new layer with input report ID 5: `0F <layer 0-3>`. `fun60ctl` uses none of these.
+- The `FC` step was found by capturing the vendor web app ([app.monsgeek.com](https://app.monsgeek.com)) in Chrome. A DevTools snippet wrapped `HIDDevice.sendFeatureReport` and `receiveFeatureReport` to log every frame while the app loaded a config.
 
 ### Bluetooth isn't supported
 
